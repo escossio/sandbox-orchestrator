@@ -2,21 +2,30 @@
 
 ## Visao geral
 
-O sandbox-orchestrator e um painel que recebe comandos, cria um job, executa um worker efemero, salva artefatos e encerra o worker ao final. O fluxo principal e:
+O sandbox-orchestrator recebe comandos, cria um job, executa um worker efemero, salva artefatos e encerra o worker ao final. Fluxo principal:
 
-1. Entrada de comando no painel
-2. Criacao do job e persistencia do estado
-3. Provisionamento de runner (shell, docker ou vm)
-4. Execucao do worker efemero
-5. Coleta de artefatos e logs
-6. Encerramento e limpeza
+UI -> API -> queue -> runner -> artifacts store
 
-## Componentes logicos
+## Componentes minimos (MVP)
 
-- Painel: interface de entrada e monitoramento de jobs
-- Orquestrador: valida parametros, enfileira e coordena execucao
-- Runner: executa o job conforme estrategia escolhida
-- Armazenamento de artefatos: logs, screenshots, downloads, metadata.json
+- UI: entrada de comando e monitoramento de jobs
+- API: valida parametros, cria job e expõe estado
+- queue: fila interna para ordenar execucoes
+- runner: executa o job conforme estrategia escolhida
+- artifacts store: logs, screenshots, downloads, metadata.json
+
+Decisoes explicitas:
+
+- Persistencia minima por job: /srv/sandbox-orchestrator/var/jobs/<job_id>/metadata.json como baseline.
+- Retries: attempts[] com attempt_id e timestamps; tentativa nova nao apaga a anterior.
+- Retencao/limpeza: politica padrao 7 dias, cleanup periodico.
+
+## Evolucoes futuras
+
+- Fila externa (ex.: Redis, SQS, Pub/Sub)
+- Banco de dados para historico, busca e agregacoes
+- Streaming de logs em tempo real
+- Cache de downloads e artefatos
 
 ## Ciclo de vida do job
 
