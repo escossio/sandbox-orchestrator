@@ -23,7 +23,7 @@ Cria um job a partir de um comando.
 - `policy.allowlist_domains` (array de string, opcional)
 - `policy.limits` (obj, opcional)
 - `runner` (obj, opcional)
-- `runner.requested` (string, opcional)
+- `runner.requested` (enum: shell|docker|vm|null, opcional)
 
 **Response 201 JSON**
 
@@ -32,7 +32,7 @@ Cria um job a partir de um comando.
 - `job.status` (string)
 - `job.created_at` (timestamp ISO-8601)
 - `job.runner` (obj, opcional)
-- `job.runner.selected` (string, opcional; presente se ja decidido)
+- `job.runner.selected` (enum: shell|docker|vm, opcional; presente se ja decidido)
 - `job.links` (obj)
 
 **Exemplo**
