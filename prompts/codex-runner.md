@@ -1,3 +1,5 @@
+Siga obrigatoriamente docs/PROTOCOL_CODEX.md
+Não faça perguntas; execute e mostre outputs; rode ./test_contract.sh após mudanças.
 # Prompt - Runner
 
 Contexto: sandbox-orchestrator.

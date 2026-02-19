@@ -1,0 +1,17 @@
+[Unit]
+Description=Sandbox Orchestrator (Dev)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/srv/aiops/projects/sandbox-orchestrator
+
+# O arquivo REAL fica no host em /etc. No repo só tem o .example.
+EnvironmentFile=/etc/sandbox-orchestrator.env
+
+ExecStart=/srv/aiops/projects/sandbox-orchestrator/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

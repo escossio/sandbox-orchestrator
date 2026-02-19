@@ -86,3 +86,9 @@ Detalhes completos em `docs/security.md`.
 - allowlist de dominios por job
 - limites de CPU/RAM/PIDs
 - docker sem privilegios (cap-drop, no-new-privileges, read-only + volume /work)
+
+## Dev workflow
+
+- Leia `docs/CONTRACT.md` e `docs/PROTOCOL_CODEX.md`.
+- Rodar testes: `./test_contract.sh`.
+- Subir dev rapidamente: `scripts/run_dev.sh`.
