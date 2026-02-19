@@ -92,3 +92,14 @@ Detalhes completos em `docs/security.md`.
 - Leia `docs/CONTRACT.md` e `docs/PROTOCOL_CODEX.md`.
 - Rodar testes: `./test_contract.sh`.
 - Subir dev rapidamente: `scripts/run_dev.sh`.
+
+## Rodar API + runner (shell)
+
+1. Exporte `DATABASE_URL` (ex: `sqlite:////tmp/sandbox.db`).
+2. Inicie a API: `scripts/run_dev.sh`.
+3. Inicie o runner: `scripts/run_runner.sh`.
+
+Logs locais:
+
+- Runner: `logs/runner.ndjson`
+- Worker: `logs/worker.ndjson`
