@@ -169,6 +169,16 @@ python3 -c 'import json,sys; data=json.load(open("/tmp/resp_policy.json")); \
     (data.get("error",{}).get("code")=="policy_denied" or (_ for _ in ()).throw(SystemExit("expected policy_denied")))' \
   >/dev/null
 
+# policy limits -> 403 policy_denied
+code="$(curl -sS -o /tmp/resp_policy_limits.json -w "%{http_code}" -X POST "$BASE_URL/api/jobs" \
+  -H 'Content-Type: application/json' \
+  -d '{"command":"echo limits","policy":{"limits":{"ram_limit_mb":99999}}}')"
+[[ "$code" == "403" ]] || { echo "expected 403 for policy_denied (limits)"; exit 2; }
+python3 -c 'import json,sys; data=json.load(open("/tmp/resp_policy_limits.json")); \
+    (data.get("error",{}).get("code")=="policy_denied" or (_ for _ in ()).throw(SystemExit("expected policy_denied for limits"))); \
+    (data.get("error",{}).get("details",{}).get("field")=="policy.limits.ram_limit_mb" or (_ for _ in ()).throw(SystemExit("expected field in policy limits error")))' \
+  >/dev/null
+
 # not_found
 code="$(curl -sS -o /tmp/resp_nf.json -w "%{http_code}" "$BASE_URL/api/jobs/job_does_not_exist")"
 [[ "$code" == "404" ]] || { echo "expected 404 for not_found"; exit 2; }
@@ -202,7 +212,8 @@ for i in $(seq 1 230); do
   code="$(curl -sS -o /tmp/resp_rl.json -w "%{http_code}" "$BASE_URL/api/health")"
   if [[ "$code" == "429" ]]; then
     python3 -c 'import json,sys; data=json.load(open("/tmp/resp_rl.json")); \
-        (data.get("error",{}).get("code")=="rate_limited" or (_ for _ in ()).throw(SystemExit("expected rate_limited")))' \
+        (data.get("error",{}).get("code")=="rate_limited" or (_ for _ in ()).throw(SystemExit("expected rate_limited"))); \
+        (data.get("error",{}).get("details",{}).get("retry_after_seconds") is not None or (_ for _ in ()).throw(SystemExit("missing retry_after_seconds")))' \
       >/dev/null
     hit=1
     break

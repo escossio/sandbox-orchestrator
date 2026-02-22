@@ -97,6 +97,10 @@ Formato padrao:
 }
 ```
 
+Notas:
+- `policy.limits` pode ser rejeitado com `403 policy_denied` quando excede limites do servidor; o `error.details` deve indicar `field`, `max` e `actual`.
+- `rate_limited` pode incluir `error.details.retry_after_seconds` e header `Retry-After`.
+
 ### 2) GET /api/jobs
 
 Lista jobs com filtros e paginacao por cursor.

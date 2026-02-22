@@ -20,6 +20,11 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 import psycopg
 
+MAX_TIME_LIMIT_SECONDS = 30
+MAX_CPU_LIMIT = 1.0
+MAX_RAM_LIMIT_MB = 512
+MAX_PID_LIMIT = 256
+
 if os.getenv("DEV_DOTENV") == "1":  # Optional .env loading in dev only
     try:
         from dotenv import load_dotenv
@@ -506,6 +511,60 @@ def _map_artifacts_out(manifest: list[dict]) -> list[dict]:
     return out
 
 
+def _parse_cpu_limit(value: Optional[str]) -> Optional[float]:
+    if value is None:
+        return None
+    match = re.search(r"([0-9]+(?:\\.[0-9]+)?)", value)
+    if not match:
+        return None
+    parsed = float(match.group(1))
+    if "%" in value:
+        return parsed / 100.0
+    return parsed
+
+
+def _check_policy_limits(limits: PolicyLimits) -> Optional[JSONResponse]:
+    if limits.time_limit_seconds is not None and limits.time_limit_seconds > MAX_TIME_LIMIT_SECONDS:
+        return _error_response(
+            "policy_denied",
+            "policy denied",
+            details={"field": "policy.limits.time_limit_seconds", "max": MAX_TIME_LIMIT_SECONDS, "actual": limits.time_limit_seconds},
+        )
+    if limits.max_runtime_seconds is not None and limits.max_runtime_seconds > MAX_TIME_LIMIT_SECONDS:
+        return _error_response(
+            "policy_denied",
+            "policy denied",
+            details={"field": "policy.limits.max_runtime_seconds", "max": MAX_TIME_LIMIT_SECONDS, "actual": limits.max_runtime_seconds},
+        )
+    if limits.ram_limit_mb is not None and limits.ram_limit_mb > MAX_RAM_LIMIT_MB:
+        return _error_response(
+            "policy_denied",
+            "policy denied",
+            details={"field": "policy.limits.ram_limit_mb", "max": MAX_RAM_LIMIT_MB, "actual": limits.ram_limit_mb},
+        )
+    if limits.pid_limit is not None and limits.pid_limit > MAX_PID_LIMIT:
+        return _error_response(
+            "policy_denied",
+            "policy denied",
+            details={"field": "policy.limits.pid_limit", "max": MAX_PID_LIMIT, "actual": limits.pid_limit},
+        )
+    if limits.cpu_limit is not None:
+        parsed = _parse_cpu_limit(limits.cpu_limit)
+        if parsed is None:
+            return _error_response(
+                "policy_denied",
+                "policy denied",
+                details={"field": "policy.limits.cpu_limit", "max": MAX_CPU_LIMIT, "actual": limits.cpu_limit},
+            )
+        if parsed > MAX_CPU_LIMIT:
+            return _error_response(
+                "policy_denied",
+                "policy denied",
+                details={"field": "policy.limits.cpu_limit", "max": MAX_CPU_LIMIT, "actual": limits.cpu_limit},
+            )
+    return None
+
+
 def _list_global_artifacts() -> list[dict]:
     items: list[dict] = []
     root = _jobs_root()
@@ -596,26 +655,43 @@ class _RateLimiter:
         self.window = 60.0
         self.requests: dict[str, list[float]] = {}
 
-    def allow(self, key: str) -> bool:
+    def check(self, key: str) -> tuple[bool, int]:
         if self.max_per_min <= 0:
-            return True
+            return True, 0
         now = time.time()
         bucket = self.requests.setdefault(key, [])
         bucket[:] = [t for t in bucket if now - t < self.window]
         if len(bucket) >= self.max_per_min:
-            return False
+            oldest = bucket[0]
+            retry_after = int(max(0.0, self.window - (now - oldest)) + 0.5)
+            return False, retry_after
         bucket.append(now)
-        return True
+        return True, 0
 
 
 rate_limiter = _RateLimiter(int(os.getenv("RATE_LIMIT_PER_MIN", "200")))
 
+def _client_ip(request: Request) -> str:
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    if request.client:
+        return request.client.host
+    return "unknown"
+
 
 @app.middleware("http")
 async def rate_limit_middleware(request: Request, call_next):
-    client_host = request.client.host if request.client else "unknown"
-    if not rate_limiter.allow(client_host):
-        return _error_response("rate_limited", "too many requests")
+    client_host = _client_ip(request)
+    allowed, retry_after = rate_limiter.check(client_host)
+    if not allowed:
+        response = _error_response(
+            "rate_limited",
+            "too many requests",
+            details={"retry_after_seconds": retry_after},
+        )
+        response.headers["Retry-After"] = str(retry_after)
+        return response
     return await call_next(request)
 
 
@@ -697,6 +773,9 @@ def create_job(payload: JobCreateRequest) -> JobCreateResponse:
     runner_selected_value = runner_selected.value if runner_selected else None
     policy_limits = None
     if payload.policy and payload.policy.limits:
+        policy_limit_error = _check_policy_limits(payload.policy.limits)
+        if policy_limit_error:
+            return policy_limit_error
         time_limit = payload.policy.limits.time_limit_seconds
         if time_limit is None:
             time_limit = payload.policy.limits.max_runtime_seconds
