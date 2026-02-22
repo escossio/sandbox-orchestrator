@@ -20,7 +20,7 @@ import os
 import re
 from contextlib import contextmanager
 
-from app.main import app, health
+from app.main import app, health, _error_response
 
 ISO_UTC_MS = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$")
 
@@ -87,4 +87,13 @@ with temp_env("sqlite:////tmp/contract.db"):
     assert ISO_UTC_MS.match(data["server_time_utc"]) is not None
 
 print("Contract tests passed.")
+
+# error envelope shape
+resp = _error_response("validation_error", "validation error", details={"field": "command"})
+payload = resp.body.decode("utf-8")
+data = __import__("json").loads(payload)
+assert set(data.keys()) == {"error", "request_id", "server_time_utc"}
+assert data["error"]["code"] == "validation_error"
+assert data["error"]["details"]["field"] == "command"
+print("Error envelope test passed.")
 PY
