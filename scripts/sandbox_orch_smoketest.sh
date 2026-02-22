@@ -381,6 +381,31 @@ main() {
     else
       warn "Artifacts request falhou (curl)"
     fi
+
+    hr
+    log "▶ GET /api/artifacts (global)"
+    if out="$(http_json GET "/api/artifacts" 2>>"$REPORT")"; then
+      if jq -e '.items and (.items | length > 0)' >/dev/null 2>&1 <<<"$out"; then
+        ga_job_id="$(jq -r '.items[0].job_id' <<<"$out")"
+        ga_name="$(jq -r '.items[0].name' <<<"$out")"
+        download_url="${BASE_URL}/api/artifacts/${ga_job_id}/${ga_name}"
+        log "▶ GET $download_url"
+        if http_url_with_status GET "$download_url"; then
+          log "HTTP $HTTP_STATUS" | tee -a "$REPORT" >/dev/null
+          if [[ "$HTTP_STATUS" =~ ^2 ]]; then
+            ok "Artifacts global download ok (HTTP $HTTP_STATUS)"
+          else
+            fail "Artifacts global download retornou HTTP $HTTP_STATUS"
+          fi
+        else
+          fail "Artifacts global download falhou (curl)"
+        fi
+      else
+        warn "Sem artifacts globais para testar download"
+      fi
+    else
+      warn "GET /api/artifacts falhou"
+    fi
   else
     warn "Sem job_id para testar endpoints de job"
   fi

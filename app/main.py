@@ -55,6 +55,10 @@ class RunnerSelected(str, Enum):
 
 
 class PolicyLimits(StrictBaseModel):
+    time_limit_seconds: Optional[int] = None
+    cpu_limit: Optional[str] = None
+    ram_limit_mb: Optional[int] = None
+    pid_limit: Optional[int] = None
     max_runtime_seconds: Optional[int] = None
     max_output_mb: Optional[int] = None
 
@@ -143,6 +147,10 @@ class JobArtifactManifest(StrictBaseModel):
 
 
 class JobPolicyLimitsOut(StrictBaseModel):
+    time_limit_seconds: Optional[int] = None
+    cpu_limit: Optional[str] = None
+    ram_limit_mb: Optional[int] = None
+    pid_limit: Optional[int] = None
     max_runtime_seconds: Optional[int] = None
     max_output_mb: Optional[int] = None
 
@@ -193,6 +201,20 @@ class JobLogsLinesResponse(StrictBaseModel):
 class JobArtifactsListResponse(StrictBaseModel):
     artifacts_manifest: list[dict]
     links: dict
+    request_id: str
+    server_time_utc: str
+
+
+class GlobalArtifactSummary(StrictBaseModel):
+    job_id: str
+    name: str
+    content_type: Optional[str] = None
+    size_bytes: Optional[int] = None
+    links: dict
+
+
+class GlobalArtifactsListResponse(StrictBaseModel):
+    items: list[GlobalArtifactSummary]
     request_id: str
     server_time_utc: str
 
@@ -335,6 +357,8 @@ def _format_error(code: str, message: str, details: Optional[dict], request_id: 
             "policy_denied": 403,
             "rate_limited": 429,
             "not_found": 404,
+            "artifact_not_found": 404,
+            "artifact_ambiguous": 409,
             "logs_unavailable": 409,
             "internal": 500,
         }.get(code, 400),
@@ -433,15 +457,25 @@ def _map_policy_out(policy: Optional[dict]) -> Optional[dict]:
     if not policy:
         return None
     limits = policy.get("limits") or {}
+    time_limit = limits.get("time_limit_seconds")
+    if time_limit is None:
+        time_limit = limits.get("max_runtime_seconds")
     max_runtime = limits.get("max_runtime_seconds")
     if max_runtime is None:
-        max_runtime = limits.get("time_limit_seconds")
+        max_runtime = time_limit
+    limits_out = {
+        "time_limit_seconds": time_limit,
+        "max_runtime_seconds": max_runtime,
+        "cpu_limit": limits.get("cpu_limit"),
+        "ram_limit_mb": limits.get("ram_limit_mb"),
+        "pid_limit": limits.get("pid_limit"),
+        "max_output_mb": limits.get("max_output_mb"),
+    }
+    if all(value is None for value in limits_out.values()):
+        limits_out = None
     return {
         "allowlist_domains": policy.get("allowlist_domains"),
-        "limits": {
-            "max_runtime_seconds": max_runtime,
-            "max_output_mb": limits.get("max_output_mb"),
-        },
+        "limits": limits_out,
     }
 
 
@@ -470,6 +504,58 @@ def _map_artifacts_out(manifest: list[dict]) -> list[dict]:
             }
         )
     return out
+
+
+def _list_global_artifacts() -> list[dict]:
+    items: list[dict] = []
+    root = _jobs_root()
+    if not root.exists():
+        return items
+    for job_dir in sorted(root.iterdir()):
+        if not job_dir.is_dir():
+            continue
+        job_id = job_dir.name
+        job_payload = _read_job_file(job_id) or {}
+        manifest = job_payload.get("artifacts_manifest") or []
+        for item in manifest:
+            name = item.get("name")
+            if not name:
+                continue
+            items.append(
+                {
+                    "job_id": job_id,
+                    "name": name,
+                    "content_type": item.get("content_type"),
+                    "size_bytes": item.get("size_bytes"),
+                    "links": {"download": f"/api/jobs/{job_id}/artifacts/{name}"},
+                }
+            )
+    return items
+
+
+def _serve_job_artifact(job_id: str, name: str, request_id: str):
+    if _fetch_job_row(job_id) is None:
+        return _error_response("not_found", "job not found", request_id=request_id)
+    job_payload = _read_job_file(job_id) or {}
+    manifest = job_payload.get("artifacts_manifest") or []
+    base_dir = _job_state_dir(job_id) / "artifacts"
+    target = (base_dir / name).resolve()
+    try:
+        base_resolved = base_dir.resolve()
+    except OSError:
+        base_resolved = base_dir
+    if base_resolved not in target.parents and target != base_resolved:
+        return _error_response("artifact_not_found", "artifact not found", request_id=request_id)
+    if not target.is_file():
+        return _error_response("artifact_not_found", "artifact not found", request_id=request_id)
+    content_type = None
+    for item in manifest:
+        if item.get("name") == name:
+            content_type = item.get("content_type")
+            break
+    if not content_type:
+        content_type = mimetypes.guess_type(str(target))[0] or "application/octet-stream"
+    return FileResponse(target, filename=target.name, media_type=content_type)
 
 
 def _extract_domains(command: str) -> list[str]:
@@ -611,8 +697,14 @@ def create_job(payload: JobCreateRequest) -> JobCreateResponse:
     runner_selected_value = runner_selected.value if runner_selected else None
     policy_limits = None
     if payload.policy and payload.policy.limits:
+        time_limit = payload.policy.limits.time_limit_seconds
+        if time_limit is None:
+            time_limit = payload.policy.limits.max_runtime_seconds
         policy_limits = JobPolicyLimitsInternal(
-            time_limit_seconds=payload.policy.limits.max_runtime_seconds,
+            time_limit_seconds=time_limit,
+            cpu_limit=payload.policy.limits.cpu_limit,
+            ram_limit_mb=payload.policy.limits.ram_limit_mb,
+            pid_limit=payload.policy.limits.pid_limit,
             max_output_mb=payload.policy.limits.max_output_mb,
         )
     policy_state = None
@@ -854,25 +946,58 @@ def get_job_artifacts(job_id: str) -> JobArtifactsListResponse:
 @app.get("/api/jobs/{job_id}/artifacts/{name}")
 def get_job_artifact(job_id: str, name: str):
     request_id = _new_id("req")
-    if _fetch_job_row(job_id) is None:
-        return _error_response("not_found", "job not found", request_id=request_id)
-    job_payload = _read_job_file(job_id) or {}
-    manifest = job_payload.get("artifacts_manifest") or []
-    base_dir = _job_state_dir(job_id) / "artifacts"
-    target = (base_dir / name).resolve()
-    try:
-        base_resolved = base_dir.resolve()
-    except OSError:
-        base_resolved = base_dir
-    if base_resolved not in target.parents and target != base_resolved:
-        return _error_response("not_found", "artifact not found", request_id=request_id)
-    if not target.is_file():
-        return _error_response("not_found", "artifact not found", request_id=request_id)
-    content_type = None
-    for item in manifest:
+    return _serve_job_artifact(job_id, name, request_id)
+
+
+@app.get("/api/artifacts", response_model=GlobalArtifactsListResponse)
+def list_artifacts(name: Optional[str] = Query(default=None)) -> GlobalArtifactsListResponse:
+    request_id = _new_id("req")
+    items = _list_global_artifacts()
+    if name:
+        items = [item for item in items if item.get("name") == name]
+    return GlobalArtifactsListResponse(items=items, request_id=request_id, server_time_utc=_now_utc())
+
+@app.get("/api/artifacts/{job_id}/{name:path}")
+def get_artifact_by_job(job_id: str, name: str):
+    request_id = _new_id("req")
+    return _serve_job_artifact(job_id, name, request_id)
+
+
+@app.get("/api/artifacts/{name}")
+def get_artifact(name: str):
+    request_id = _new_id("req")
+    matches: list[tuple[str, str]] = []
+    candidates: list[dict] = []
+    for item in _list_global_artifacts():
         if item.get("name") == name:
-            content_type = item.get("content_type")
-            break
-    if not content_type:
-        content_type = mimetypes.guess_type(str(target))[0] or "application/octet-stream"
-    return FileResponse(target, filename=target.name, media_type=content_type)
+            job_id = item.get("job_id")
+            matches.append((job_id, name))
+            if len(candidates) < 20:
+                candidates.append(
+                    {
+                        "job_id": job_id,
+                        "name": name,
+                        "content_type": item.get("content_type"),
+                        "size_bytes": item.get("size_bytes"),
+                        "links": {"download": f"/api/artifacts/{job_id}/{name}"},
+                    }
+                )
+    if not matches:
+        return _error_response("artifact_not_found", "artifact not found", request_id=request_id)
+    if len(matches) > 1:
+        return JSONResponse(
+            status_code=409,
+            content={
+                "error": {
+                    "code": "artifact_ambiguous",
+                    "message": "multiple artifacts found with the same name",
+                    "name": name,
+                    "candidates": candidates,
+                    "hint": "Use GET /api/artifacts/{job_id}/{name} (or use /api/artifacts?name=... to list matches).",
+                },
+                "request_id": request_id,
+                "server_time_utc": _now_utc(),
+            },
+        )
+    job_id, artifact_name = matches[0]
+    return _serve_job_artifact(job_id, artifact_name, request_id)

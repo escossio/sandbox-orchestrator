@@ -416,3 +416,68 @@ Formato padrao:
   "server_time_utc": "2026-02-15T12:43:00Z"
 }
 ```
+
+### 7) GET /api/artifacts
+
+Lista artefatos globais (todos os jobs).
+
+**Query params**
+
+- `name` (opcional) filtra por nome exato do artefato
+
+**Response 200 JSON**
+
+- `items` (array)
+  - `job_id` (string)
+  - `name` (string)
+  - `content_type` (string|null)
+  - `size_bytes` (int|null)
+  - `links.download` (string)
+
+### 8) GET /api/artifacts/{job_id}/{name}
+
+Download direto (deterministico) de um artefato.
+
+**Response**
+
+- Download do artefato com `Content-Type` correto.
+
+**Codigos de erro**
+
+- 404 Not found
+- 500 Internal
+
+### 9) GET /api/artifacts/{name}
+
+Download por nome (pode ser ambiguo).
+
+**Comportamento**
+
+- 0 match: 404
+- 1 match: 200 (download)
+- >1 match: 409 com candidatos e instrucao de desambiguacao
+
+**Formato 409 (envelope padrao)**
+```json
+{
+  "error": {
+    "code": "artifact_ambiguous",
+    "message": "multiple artifacts found with the same name",
+    "name": "hello.txt",
+    "candidates": [
+      {
+        "job_id": "job_...",
+        "name": "hello.txt",
+        "content_type": "text/plain",
+        "size_bytes": 6,
+        "links": {
+          "download": "/api/artifacts/job_.../hello.txt"
+        }
+      }
+    ],
+    "hint": "Use GET /api/artifacts/{job_id}/{name} (or use /api/artifacts?name=... to list matches)."
+  },
+  "request_id": "req_...",
+  "server_time_utc": "2026-02-15T12:43:00Z"
+}
+```

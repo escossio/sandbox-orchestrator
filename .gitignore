@@ -27,3 +27,6 @@ __pycache__/
 .venv/
 venv/
 .state/
+
+# local-only helper
+scripts/smoke_local.sh

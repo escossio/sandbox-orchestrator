@@ -108,6 +108,14 @@ python3 -c 'import json,sys; data=json.loads(sys.argv[1]); \
 curl -fsS "$BASE_URL/api/jobs/$artifact_job_id/artifacts/hello.txt" -o /tmp/sbox_hello.txt
 grep -q "hello" /tmp/sbox_hello.txt
 
+global_artifacts="$(curl -fsS "$BASE_URL/api/artifacts")"
+global_job_id="$(python3 -c 'import json,sys; d=json.loads(sys.argv[1]); items=d.get("items",[]); print(items[0].get("job_id","") if items else "")' "$global_artifacts")"
+global_name="$(python3 -c 'import json,sys; d=json.loads(sys.argv[1]); items=d.get("items",[]); print(items[0].get("name","") if items else "")' "$global_artifacts")"
+if [[ -n "$global_job_id" && -n "$global_name" ]]; then
+  curl -fsS "$BASE_URL/api/artifacts/$global_job_id/$global_name" -o /tmp/sbox_artifact_global.bin
+  test -s /tmp/sbox_artifact_global.bin || { echo "empty global artifact download"; exit 2; }
+fi
+
 job_full="$(curl -fsS "$BASE_URL/api/jobs/$artifact_job_id")"
 python3 -c 'import json,sys; data=json.loads(sys.argv[1]); job=data.get("job",{}); \
     (job.get("attempts") or (_ for _ in ()).throw(SystemExit("missing attempts in job response"))); \
